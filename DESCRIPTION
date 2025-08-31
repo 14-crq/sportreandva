@@ -1,0 +1,41 @@
+Package: sportreandva
+Title: A Tool for Analyzing Reliability and Validity in Sports Science
+Version: 1.1
+Authors@R: 
+    person(given = "Ruiqi",
+           family = "Cheng",
+           role = c("aut", "cre"),
+           email = "crq1477@163.com",
+           comment = c(ORCID = "0009-0002-5688-6245"))
+Description: Provides a focused suite of functions to conduct comprehensive 
+    reliability and analysis for repeated measures data in sports science. 
+    All functions are designed to work with long-format data. 
+    Key functions include reliability analysis for two sessions (t-test) or 
+    multiple sessions (ANOVA) and validity analysis, as well as Bland-Altman analysis and visualization.
+    In addition, this package also supports exporting publication-ready three-line tables.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports: 
+    dplyr,
+    ggplot2,
+    gghalves,
+    irr,
+    rlang,
+    rstatix,
+    stats,
+    tidyr,
+    officer,
+    cowplot,
+    flextable,
+    ggExtra,
+    ggpmisc,
+    purrr,
+    ggpubr,
+    colourpicker
+Suggests:
+    knitr,
+    rmarkdown
+RoxygenNote: 7.3.2
+Depends: 
+    R (>= 3.5)
