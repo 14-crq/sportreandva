@@ -13,6 +13,7 @@ analysis_validity(
   value_cols,
   trial_col = NULL,
   method = "mean",
+  swc_threshold = NULL,
   var_names = NULL
 )
 }

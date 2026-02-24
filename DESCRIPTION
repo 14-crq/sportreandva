@@ -1,6 +1,6 @@
 Package: sportreandva
 Title: A Tool for Analyzing Reliability and Validity in Sports Science
-Version: 1.1
+Version: 2.0
 Authors@R: 
     person(given = "Ruiqi",
            family = "Cheng",

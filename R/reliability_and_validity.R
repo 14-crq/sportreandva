@@ -138,6 +138,7 @@ analyze_reliability_ttest <- function(data,
                                       method = "mean",
                                       icc_model = c("twoway", "oneway"),
                                       icc_type = c("agreement", "consistency"),
+                                      swc_threshold = NULL,
                                       var_names = NULL) {
 
   # --- 参数预处理 ---
@@ -196,6 +197,15 @@ analyze_reliability_ttest <- function(data,
           dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
       }
 
+      stats_summary <- processed_data %>%
+        dplyr::group_by(!!session_sym) %>%
+        dplyr::summarise(
+          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
+                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
+          .groups = 'drop'
+        ) %>%
+        tidyr::pivot_wider(names_from = !!session_sym, values_from = mean_sd)
+
       wide_data <- processed_data %>%
         tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
       measure_cols <- levels(local_data[[session_col]])
@@ -222,7 +232,7 @@ analyze_reliability_ttest <- function(data,
       te <- stats::sd(diffs, na.rm = TRUE) / sqrt(2)
       grand_mean <- mean(c(wide_data[[measure_cols[1]]], wide_data[[measure_cols[2]]]), na.rm = TRUE)
       cv_percent <- (te / grand_mean) * 100
-      swc <- 0.2 * between_subject_sd
+      swc <- swc_threshold * between_subject_sd
 
       ttest_result <- stats::t.test(wide_data[[measure_cols[1]]], wide_data[[measure_cols[2]]], paired = TRUE)
       formula_for_d <- stats::as.formula(paste("agg_value ~", session_col))
@@ -240,6 +250,7 @@ analyze_reliability_ttest <- function(data,
       # --- 结果汇总 ---
       results_df <- data.frame(
         Variable = final_var_name,
+        stats_summary,
         "ICC (95% CI)" = paste0(round(chosen_icc$value, 2), ' (', round(chosen_icc$lbound, 2), ',', round(chosen_icc$ubound, 2), ')'),
         'p (ICC)' = round(chosen_icc$p, 3),
         'ICC Magnitude' = icc_magnitude,
@@ -307,6 +318,7 @@ analyze_reliability_ANOVA <- function(data,
                                       method = "mean",
                                       icc_model = c("twoway", "oneway"),
                                       icc_type = c("agreement", "consistency"),
+                                      swc_threshold = NULL,
                                       var_names = NULL) {
 
   final_icc_model <- match.arg(icc_model)
@@ -364,6 +376,15 @@ analyze_reliability_ANOVA <- function(data,
           dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
       }
 
+      stats_summary <- processed_data %>%
+        dplyr::group_by(!!session_sym) %>%
+        dplyr::summarise(
+          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
+                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
+          .groups = 'drop'
+        ) %>%
+        tidyr::pivot_wider(names_from = !!session_sym, values_from = mean_sd)
+
       wide_data <- processed_data %>%
         tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
 
@@ -402,7 +423,7 @@ analyze_reliability_ANOVA <- function(data,
       te <- sqrt(mse)
       grand_mean <- mean(long_for_calc$value, na.rm = TRUE)
       cv_percent <- (te / grand_mean) * 100
-      swc <- 0.2 * between_subject_sd
+      swc <- swc_threshold * between_subject_sd
 
       rm_anova_results <- rstatix::anova_test(
         data = long_for_calc, dv = value, wid = subject_id, within = trial, effect.size = "pes"
@@ -418,6 +439,7 @@ analyze_reliability_ANOVA <- function(data,
 
       results_df <- data.frame(
         Variable = final_var_name,
+        stats_summary,
         "ICC (95% CI)" = paste0(round(chosen_icc$value, 2), ' (', round(chosen_icc$lbound, 2), ',', round(chosen_icc$ubound, 2), ')'),
         'p (ICC)' = round(chosen_icc$p, 3),
         'ICC Magnitude' = icc_magnitude,
@@ -471,6 +493,7 @@ analysis_validity <- function(data,
                               value_cols,
                               trial_col = NULL,
                               method = "mean",
+                              swc_threshold = NULL,
                               var_names = NULL) {
 
   # --- Parameter checks ---
@@ -495,6 +518,16 @@ analysis_validity <- function(data,
       } else {
         processed_data <- local_data %>% dplyr::select(!!subject_sym, !!method_sym, agg_value = !!value_sym)
       }
+
+      stats_summary <- processed_data %>%
+        dplyr::group_by(!!method_sym) %>%
+        dplyr::summarise(
+          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
+                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
+          .groups = 'drop'
+        ) %>%
+        tidyr::pivot_wider(names_from = !!method_sym, values_from = mean_sd)
+
       wide_data <- processed_data %>% tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!method_sym, values_from = agg_value)
       if (!all(c(criterion_method, test_method) %in% names(wide_data))) { stop("处理数据后出错，无法找到指定的金标准或测试方法列。") }
       criterion_measure <- wide_data[[criterion_method]]; test_measure <- wide_data[[test_method]]
@@ -514,7 +547,7 @@ analysis_validity <- function(data,
       r_magnitude <- dplyr::case_when(abs(pearson_r) < 0.1 ~ "Trivial", abs(pearson_r) < 0.3 ~ "Small", abs(pearson_r) < 0.5 ~ "Moderate", abs(pearson_r) < 0.7 ~ "Large", abs(pearson_r) < 0.9 ~ "Very Large", TRUE ~ "Nearly Perfect")
       sd_criterion <- stats::sd(criterion_measure, na.rm = TRUE)
       see <- sd_criterion * sqrt(1 - pearson_r^2)
-      swc <- 0.2 * sd_criterion
+      swc <- swc_threshold * sd_criterion
       mbi_inference <- dplyr::case_when(diff_conf_int[2] < -swc ~ "Substantially Lower", diff_conf_int[1] > swc ~ "Substantially Higher", diff_conf_int[1] > -swc & diff_conf_int[2] < swc ~ "Trivial", TRUE ~ "Unclear")
       se_diff <- (diff_conf_int[2] - diff_conf_int[1]) / (2 * qt(0.975, df = ttest_result$parameter))
       prob_lower <- round(pt((-swc - mean_diff) / se_diff, df = ttest_result$parameter) * 100)
@@ -525,6 +558,7 @@ analysis_validity <- function(data,
       # --- Final results table ---
       results_df <- data.frame(
         "Variable" = final_var_name,
+        stats_summary,
         "Mean Diff (95% CI)" = paste0(round(mean_diff, 2), " (", round(diff_conf_int[1], 2), ", ", round(diff_conf_int[2], 2), ")"),
         "p (t)" = round(ttest_result$p.value, 3),
         "ES (d)" = round(cohens_d_result$effsize, 2),

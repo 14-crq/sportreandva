@@ -14,6 +14,7 @@ analyze_reliability_ttest(
   method = "mean",
   icc_model = c("twoway", "oneway"),
   icc_type = c("agreement", "consistency"),
+  swc_threshold = NULL,
   var_names = NULL
 )
 }
