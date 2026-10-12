@@ -1,3 +1,10 @@
+# sportreandva 2.0.2
+
+- 根据 Weir (2005) 与用户指定，默认 SEM 使用 SD*sqrt(1-ICC)，明确区分 single 和 average 的 SD 取法。
+- 默认 CV 使用 100*SEM/均值；保留 raw TE-based CV 和参考表 log CV。
+- 备选 sem_method="weir" 为单分数 ANOVA 误差标准差，icc 保留 2.0.1 算法。
+- 结果标明 SEM Method、SEM Unit、SD for SEM 与 CV Method，增加 Weir 算例与公式回归验证。
+
 # sportreandva 2.0.1
 
 - 统一信度分析数据准备，按完整被试配对，校验重复记录和非法输入。

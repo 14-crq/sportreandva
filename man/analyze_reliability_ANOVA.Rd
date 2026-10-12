@@ -16,7 +16,8 @@ analyze_reliability_ANOVA(
   icc_type = c("agreement", "consistency"),
   swc_threshold = NULL,
   var_names = NULL,
-  cv_method = c("raw", "log")
+  cv_method = c("sem", "raw", "log"),
+  sem_method = c("sd_icc", "weir", "icc")
 )
 }
 \arguments{
@@ -43,7 +44,9 @@ analyze_reliability_ANOVA(
 \item{var_names}{(可选) 一个与 `value_cols` 一一对应的字符向量，用于在结果中重命名变量。
 如果提供，其长度必须与 `value_cols` 相同。}
 
-\item{cv_method}{raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。}
+\item{cv_method}{sem 为 100*SEM/均值，随 SEM 单位；raw 为单分数 100*TE/均值；log 为单分数 100*(exp(TE_log)-1)，与参考表一致，要求正值。}
+
+\item{sem_method}{sd_icc 为 SD*sqrt(1-ICC)，SD 与 ICC 单位配套；weir 为单分数 ANOVA 误差标准差；icc 保留 2.0.1 的模型匹配 SEM。}
 }
 \value{
 返回一个数据框，包含一个或多个变量的会话间信度分析结果。
@@ -55,9 +58,14 @@ analyze_reliability_ANOVA(
 }
 \details{
 TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
-  SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
-  双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
-  单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
+  默认 sd_icc 使用 SEM=SD*sqrt(1-ICC)。single 的 SD 为全部观测分数的样本 SD，
+  average 的 SD 为被试跨会话均值的样本 SD。不得使用差值 SD。
+  这是指定 SD 取法的经典估计，不声称与直接 ANOVA 误差标准差恒等。
+  可选 weir 的 SEM 描述单个分数：双因素 SEM=sqrt(MSE)，两会话等于 TE。
+  单因素 SEM=sqrt(MS_within)，含会话效应，不等同于双因素随机 SEM。
+  ICC 的 single/average 不改变 weir 的 SEM 单位；均值随机 SEM 可另外除以 sqrt(会话数)。
+  icc 选项保留 2.0.1 的模型匹配 SEM：agreement 使用 MSE+(MS_session-MSE)/N，
+  consistency 使用 MSE；average 单位的误差方差再除以会话数，负方差返回 NA。
 }
 \examples{
 # 使用全部三个会话进行 ANOVA 信度分析
@@ -69,4 +77,7 @@ analyze_reliability_ANOVA(
   trial_col = "Trial",
   method = "mean"
 )
+}
+\references{
+Weir JP (2005). Quantifying test-retest reliability using the intraclass correlation coefficient and the SEM. Journal of Strength and Conditioning Research, 19(1), 231-240. doi:10.1519/15184.1.
 }

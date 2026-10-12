@@ -92,12 +92,19 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
 }
 
 # 函数2：两次重复测量信度----
-#' @param cv_method raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。
+#' @param cv_method sem 为 100*SEM/均值，随 SEM 单位；raw 为单分数 100*TE/均值；log 为单分数 100*(exp(TE_log)-1)，与参考表一致，要求正值。
 #' @param swc_threshold 非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。
 #' @details TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
-#'   SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
-#'   双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
-#'   单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
+#'   默认 sd_icc 使用 SEM=SD*sqrt(1-ICC)。single 的 SD 为全部观测分数的样本 SD，
+#'   average 的 SD 为被试跨会话均值的样本 SD。不得使用差值 SD。
+#'   这是指定 SD 取法的经典估计，不声称与直接 ANOVA 误差标准差恒等。
+#'   可选 weir 的 SEM 描述单个分数：双因素 SEM=sqrt(MSE)，两会话等于 TE。
+#'   单因素 SEM=sqrt(MS_within)，含会话效应，不等同于双因素随机 SEM。
+#'   ICC 的 single/average 不改变 weir 的 SEM 单位；均值随机 SEM 可另外除以 sqrt(会话数)。
+#'   icc 选项保留 2.0.1 的模型匹配 SEM：agreement 使用 MSE+(MS_session-MSE)/N，
+#'   consistency 使用 MSE；average 单位的误差方差再除以会话数，负方差返回 NA。
+#' @param sem_method sd_icc 为 SD*sqrt(1-ICC)，SD 与 ICC 单位配套；weir 为单分数 ANOVA 误差标准差；icc 保留 2.0.1 的模型匹配 SEM。
+#' @references Weir JP (2005). Quantifying test-retest reliability using the intraclass correlation coefficient and the SEM. Journal of Strength and Conditioning Research, 19(1), 231-240. doi:10.1519/15184.1.
 #' @title 分析两个会话的重测信度 (t检验, 支持批量处理)
 #' @description 专为比较两个会话(test-retest)的场景设计。可对单个或多个因变量进行分析。
 #'   使用配对t检验和Cohen's d评估系统误差。
@@ -138,15 +145,17 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
 analyze_reliability_ttest <- function(data, subject_col, session_col, value_cols,
     trial_type = c("single", "average"), trial_col = NULL, method = "mean",
     icc_model = c("twoway", "oneway"), icc_type = c("agreement", "consistency"),
-    swc_threshold = NULL, var_names = NULL, cv_method = c("raw", "log")) {
+    swc_threshold = NULL, var_names = NULL, cv_method = c("sem", "raw", "log"),
+    sem_method = c("sd_icc", "weir", "icc")) {
   model <- match.arg(icc_model); type <- match.arg(icc_type)
   unit <- match.arg(trial_type); cv_method <- match.arg(cv_method)
+  sem_method <- match.arg(sem_method)
   .validate_reliability_options(value_cols, var_names, swc_threshold)
   purrr::imap_dfr(value_cols, function(current_value_col, index) {
     x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
     if (ncol(x) != 2L) stop("\u6b64\u51fd\u6570\u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4f1a\u8bdd\u3002")
     icc <- irr::icc(x, model = model, type = type, unit = unit)
-    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold)
+    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold, sem_method, icc$value)
     summary <- as.data.frame(as.list(stats::setNames(vapply(seq_len(ncol(x)), function(j) {
       paste0(round(mean(x[, j]), 2), " \u00b1 ", round(stats::sd(x[, j]), 2))
     }, character(1)), colnames(x))), check.names = FALSE)
@@ -164,17 +173,27 @@ analyze_reliability_ttest <- function(data, subject_col, session_col, value_cols
     out[["N"]] <- nrow(x)
     out[["CV Method"]] <- cv_method
     out[["ICC Unit"]] <- unit
+    out[["SEM Method"]] <- sem_method
+    out[["SEM Unit"]] <- if (sem_method == "weir") "single" else unit
+    out[["SD for SEM"]] <- if (sem_method == "sd_icc") metrics$sem_sd else NA_real_
     out
   })
 }
 
 # 函数3：多次重复测量信度 (支持批量处理)----
-#' @param cv_method raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。
+#' @param cv_method sem 为 100*SEM/均值，随 SEM 单位；raw 为单分数 100*TE/均值；log 为单分数 100*(exp(TE_log)-1)，与参考表一致，要求正值。
 #' @param swc_threshold 非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。
 #' @details TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
-#'   SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
-#'   双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
-#'   单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
+#'   默认 sd_icc 使用 SEM=SD*sqrt(1-ICC)。single 的 SD 为全部观测分数的样本 SD，
+#'   average 的 SD 为被试跨会话均值的样本 SD。不得使用差值 SD。
+#'   这是指定 SD 取法的经典估计，不声称与直接 ANOVA 误差标准差恒等。
+#'   可选 weir 的 SEM 描述单个分数：双因素 SEM=sqrt(MSE)，两会话等于 TE。
+#'   单因素 SEM=sqrt(MS_within)，含会话效应，不等同于双因素随机 SEM。
+#'   ICC 的 single/average 不改变 weir 的 SEM 单位；均值随机 SEM 可另外除以 sqrt(会话数)。
+#'   icc 选项保留 2.0.1 的模型匹配 SEM：agreement 使用 MSE+(MS_session-MSE)/N，
+#'   consistency 使用 MSE；average 单位的误差方差再除以会话数，负方差返回 NA。
+#' @param sem_method sd_icc 为 SD*sqrt(1-ICC)，SD 与 ICC 单位配套；weir 为单分数 ANOVA 误差标准差；icc 保留 2.0.1 的模型匹配 SEM。
+#' @references Weir JP (2005). Quantifying test-retest reliability using the intraclass correlation coefficient and the SEM. Journal of Strength and Conditioning Research, 19(1), 231-240. doi:10.1519/15184.1.
 #' @title 从长格式数据分析重测信度 (支持单个或多个变量)
 #' @description 为长格式数据设计。可对单个或多个因变量进行分析。
 #'   函数会自动聚合一个“会话(Session)”内的多次“尝试(Trial)”，
@@ -215,15 +234,17 @@ analyze_reliability_ttest <- function(data, subject_col, session_col, value_cols
 analyze_reliability_ANOVA <- function(data, subject_col, session_col, value_cols,
     trial_type = c("single", "average"), trial_col = NULL, method = "mean",
     icc_model = c("twoway", "oneway"), icc_type = c("agreement", "consistency"),
-    swc_threshold = NULL, var_names = NULL, cv_method = c("raw", "log")) {
+    swc_threshold = NULL, var_names = NULL, cv_method = c("sem", "raw", "log"),
+    sem_method = c("sd_icc", "weir", "icc")) {
   model <- match.arg(icc_model); type <- match.arg(icc_type)
   unit <- match.arg(trial_type); cv_method <- match.arg(cv_method)
+  sem_method <- match.arg(sem_method)
   .validate_reliability_options(value_cols, var_names, swc_threshold)
   purrr::imap_dfr(value_cols, function(current_value_col, index) {
     x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
 
     icc <- irr::icc(x, model = model, type = type, unit = unit)
-    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold)
+    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold, sem_method, icc$value)
     summary <- as.data.frame(as.list(stats::setNames(vapply(seq_len(ncol(x)), function(j) {
       paste0(round(mean(x[, j]), 2), " \u00b1 ", round(stats::sd(x[, j]), 2))
     }, character(1)), colnames(x))), check.names = FALSE)
@@ -245,6 +266,9 @@ analyze_reliability_ANOVA <- function(data, subject_col, session_col, value_cols
     out[["N"]] <- nrow(x)
     out[["CV Method"]] <- cv_method
     out[["ICC Unit"]] <- unit
+    out[["SEM Method"]] <- sem_method
+    out[["SEM Unit"]] <- if (sem_method == "weir") "single" else unit
+    out[["SD for SEM"]] <- if (sem_method == "sd_icc") metrics$sem_sd else NA_real_
     out
   })
 }

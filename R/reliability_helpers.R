@@ -46,26 +46,34 @@
   list(mse = mse, ms_session = ms_session, ms_subject = ms_subject, ms_within = ms_within)
 }
 
-# SEM 与所选 ICC 的方差模型一致；TE 和 CV 始终描述单个会话分数。
-.reliability_metrics <- function(x, model, type, unit, cv_method, swc_threshold) {
+# SD 与 ICC 单位配套：单分数使用全部观测分数的 SD，均值使用被试均值的 SD。
+# 直接 ANOVA 和旧版模型匹配算法作为明确选择的备选项保留。
+.reliability_metrics <- function(x, model, type, unit, cv_method, swc_threshold,
+                                 sem_method = "sd_icc", icc_value = NULL) {
   e <- .error_components(x)
   k <- ncol(x); n <- nrow(x)
   sem_var <- if (model == "oneway") e$ms_within else if (type == "consistency") {
     e$mse
   } else e$mse + (e$ms_session - e$mse) / n
-  sem <- if (sem_var >= 0) sqrt(sem_var / if (unit == "average") k else 1) else NA_real_
+  sem_sd <- if (unit == "average") stats::sd(rowMeans(x)) else stats::sd(as.vector(x))
+  sem <- if (sem_method == "sd_icc") {
+    if (is.null(icc_value)) icc_value <- irr::icc(x, model = model, type = type, unit = unit)$value
+    if (is.finite(icc_value) && icc_value <= 1) sem_sd * sqrt(1 - icc_value) else NA_real_
+  } else if (sem_method == "weir") {
+    sqrt(if (model == "oneway") e$ms_within else e$mse)
+  } else if (sem_var >= 0) sqrt(sem_var / if (unit == "average") k else 1) else NA_real_
   te <- sqrt(e$mse)
   cv <- if (cv_method == "log") {
     if (any(x <= 0)) stop("\u5bf9\u6570 CV \u8981\u6c42\u6240\u6709\u805a\u5408\u540e\u7684\u6570\u503c\u4e25\u683c\u5927\u4e8e\u96f6\u3002")
     100 * expm1(sqrt(.error_components(log(x))$mse))
-  } else if (mean(x) > 0) 100 * te / mean(x) else {
+  } else if (mean(x) > 0) 100 * (if (cv_method == "sem") sem else te) / mean(x) else {
     warning("\u5747\u503c\u975e\u6b63\uff0c\u539f\u59cb CV \u65e0\u5b9a\u4e49\uff0c\u8fd4\u56de NA\u3002", call. = FALSE)
     NA_real_
   }
   pooled_sd <- sqrt(mean(apply(x, 2L, stats::var)))
   swc <- if (is.null(swc_threshold)) NA_real_ else swc_threshold * pooled_sd
   usefulness <- if (is.na(swc)) NA_character_ else if (te < swc) "Good" else if (te == swc) "OK" else "Marginal"
-  list(sem = sem, te = te, mse = e$mse, cv = cv, swc = swc, usefulness = usefulness)
+  list(sem = sem, sem_sd = sem_sd, te = te, mse = e$mse, cv = cv, swc = swc, usefulness = usefulness)
 }
 
 # NULL 表示不计算 SWC，保留结果行并返回缺失值。
