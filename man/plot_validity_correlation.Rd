@@ -44,6 +44,8 @@ plot_validity_correlation(
 \item{ci_fill}{(可选) 回归线置信区间的填充颜色。}
 
 \item{density_fill}{(可选) 边缘密度图的填充颜色。}
+
+\item{density_color}{边缘密度曲线颜色。}
 }
 \value{
 返回一个包含一个或多个 ggplot 对象的列表。

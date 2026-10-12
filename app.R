@@ -95,7 +95,10 @@ ui <- fluidPage(
                                             "日内信度 (比较特定 Session 内的 Trial)" = "intra"),
                                 inline = TRUE),
                    uiOutput("intra_day_selector_ui"),
-                   uiOutput("inter_day_agg_ui")
+                   uiOutput("inter_day_agg_ui"),
+                   selectInput("rel_cv_method", "CV 计算方式:",
+                     choices = c("对数 CV（参考表公式，要求正值）" = "log", "原始 CV（TE / 均值）" = "raw")),
+                   numericInput("rel_swc", "SWC 系数:", value = 0.2, min = 0, step = 0.05)
                  ),
                  actionButton("run_rel_btn", "开始信度分析", icon = icon("cogs")),
                  hr(),
@@ -321,7 +324,8 @@ server <- function(input, output, session) {
           session_col = input$session_col,
           value_cols = input$value_cols,
           trial_col = input$trial_col,
-          method = input$inter_day_agg_method
+          method = input$inter_day_agg_method,
+          cv_method = input$rel_cv_method, swc_threshold = input$rel_swc
         )
       } else {
         analyze_reliability_ANOVA(
@@ -330,7 +334,8 @@ server <- function(input, output, session) {
           session_col = input$session_col,
           value_cols = input$value_cols,
           trial_col = input$trial_col,
-          method = input$inter_day_agg_method
+          method = input$inter_day_agg_method,
+          cv_method = input$rel_cv_method, swc_threshold = input$rel_swc
         )
       }
     } else {
@@ -344,7 +349,8 @@ server <- function(input, output, session) {
         session_col = input$trial_col,
         value_cols = input$value_cols,
         trial_col = NULL,
-        trial_type = 'single'
+        trial_type = 'single',
+        cv_method = input$rel_cv_method, swc_threshold = input$rel_swc
       )
     }
   })

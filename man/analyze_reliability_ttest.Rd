@@ -15,7 +15,8 @@ analyze_reliability_ttest(
   icc_model = c("twoway", "oneway"),
   icc_type = c("agreement", "consistency"),
   swc_threshold = NULL,
-  var_names = NULL
+  var_names = NULL,
+  cv_method = c("raw", "log")
 )
 }
 \arguments{
@@ -37,8 +38,12 @@ analyze_reliability_ttest(
 
 \item{icc_type}{(可选) 传递给`ICC`函数的类型（agreement/consistency）。}
 
+\item{swc_threshold}{非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。}
+
 \item{var_names}{(可选) 一个与 `value_cols` 一一对应的字符向量，用于在结果中重命名变量。
 如果提供，其长度必须与 `value_cols` 相同。}
+
+\item{cv_method}{raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。}
 }
 \value{
 返回一个数据框，包含一个或多个变量的信度分析结果，并附有t检验和Cohen's d统计量。
@@ -47,12 +52,18 @@ analyze_reliability_ttest(
 专为比较两个会话(test-retest)的场景设计。可对单个或多个因变量进行分析。
   使用配对t检验和Cohen's d评估系统误差。
 }
+\details{
+TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
+  SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
+  双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
+  单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
+}
 \examples{
 # 筛选出前两次会话 (Week1 vs Week2) 进行 t检验信度分析
 reliability_subset_ttest <- reliability_data[reliability_data$Session \%in\% c("Week1", "Week2"), ]
 analyze_reliability_ttest(
   data = reliability_subset_ttest,
-  subject_col = "Subject",
+  subject_col = "Participant",
   session_col = "Session",
   value_cols = "Score",
   trial_col = "Trial",

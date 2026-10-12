@@ -18,9 +18,25 @@ analysis_validity(
 )
 }
 \arguments{
+\item{data}{长格式数据框。}
+
+\item{subject_col}{被试标识列名。}
+
+\item{method_col}{测量方法列名。}
+
 \item{criterion_method}{一个字符串，指定 `method_col` 中代表**金标准**的水平名称。}
 
 \item{test_method}{一个字符串，指定 `method_col` 中代表**测试方法**的水平名称。}
+
+\item{value_cols}{数值指标列名向量。}
+
+\item{trial_col}{试次列名；提供后按被试和方法聚合。}
+
+\item{method}{聚合方法：mean、max、min 或 median。}
+
+\item{swc_threshold}{非负 SWC 系数；NULL 表示不计算阈值推断。}
+
+\item{var_names}{与指标一一对应的显示名称。}
 }
 \description{
 (推荐) 用于效度分析，通过明确指定金标准和测试方法，进行全面的比较...
@@ -33,6 +49,7 @@ analysis_validity(
   method_col = "Device",
   criterion_method = "GasAnalyzer",
   test_method = "PortableDevice",
-  value_cols = "VO2max"
+  value_cols = "VO2max",
+  trial_col = "Trial"
 )
 }

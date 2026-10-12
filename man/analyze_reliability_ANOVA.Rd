@@ -15,7 +15,8 @@ analyze_reliability_ANOVA(
   icc_model = c("twoway", "oneway"),
   icc_type = c("agreement", "consistency"),
   swc_threshold = NULL,
-  var_names = NULL
+  var_names = NULL,
+  cv_method = c("raw", "log")
 )
 }
 \arguments{
@@ -27,7 +28,7 @@ analyze_reliability_ANOVA(
 
 \item{value_cols}{包含需要分析的指标数值的列名。可以是单个字符串，也可以是包含多个字符串的向量。}
 
-\item{trial_type}{用户选择的ICC类型。当 trial_col 被使用且 method = 'mean' 时，此参数会被自动设为 "average"。}
+\item{trial_type}{跨会话 ICC 的单位：single 为一个会话分数，average 为所有会话分数的平均。会话内聚合不会自动改变此参数。}
 
 \item{trial_col}{(可选) 包含试次编号的列名。如果提供，函数会聚合这些试次。}
 
@@ -37,8 +38,12 @@ analyze_reliability_ANOVA(
 
 \item{icc_type}{(可选) 传递给`ICC`函数的类型。默认为 "agreement"。可选 "agreement" 或 "consistency"。}
 
+\item{swc_threshold}{非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。}
+
 \item{var_names}{(可选) 一个与 `value_cols` 一一对应的字符向量，用于在结果中重命名变量。
 如果提供，其长度必须与 `value_cols` 相同。}
+
+\item{cv_method}{raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。}
 }
 \value{
 返回一个数据框，包含一个或多个变量的会话间信度分析结果。
@@ -48,11 +53,17 @@ analyze_reliability_ANOVA(
   函数会自动聚合一个“会话(Session)”内的多次“尝试(Trial)”，
   或将一个“会话(Session)”作为独立个体，然后计算“会话(Session)”之间的信度。
 }
+\details{
+TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
+  SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
+  双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
+  单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
+}
 \examples{
 # 使用全部三个会话进行 ANOVA 信度分析
 analyze_reliability_ANOVA(
   data = reliability_data,
-  subject_col = "Subject",
+  subject_col = "Participant",
   session_col = "Session",
   value_cols = "Score",
   trial_col = "Trial",

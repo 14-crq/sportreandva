@@ -1,4 +1,4 @@
-# sportreandva Package: Core Analysis Script (Long-Format-Only Edition)
+# sportreandva 核心分析脚本：仅接受长格式数据
 # 文件名: reliability_and_validity.R
 # 描述: 包含sportreandva包的所有核心函数。所有函数均要求输入长格式数据。
 
@@ -48,8 +48,8 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
 
       for (col in group_cols) {
         if (!is.factor(local_data[[col]])) {
-          warning(paste0("提醒: 分组列 '", col, "' 不是因子类型，已自动转换为因子。\n",
-                         "为确保顺序正确，建议您在函数外部预先设置因子水平。"),
+          warning(paste0("\u63d0\u9192: \u5206\u7ec4\u5217 '", col, "' \u4e0d\u662f\u56e0\u5b50\u7c7b\u578b\uff0c\u5df2\u81ea\u52a8\u8f6c\u6362\u4e3a\u56e0\u5b50\u3002\n",
+                         "\u4e3a\u786e\u4fdd\u987a\u5e8f\u6b63\u786e\uff0c\u5efa\u8bae\u60a8\u5728\u51fd\u6570\u5916\u90e8\u9884\u5148\u8bbe\u7f6e\u56e0\u5b50\u6c34\u5e73\u3002"),
                   call. = FALSE)
           local_data[[col]] <- as.factor(local_data[[col]])
         }
@@ -64,8 +64,8 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
           n = sum(!is.na(!!value_sym)),
           mean = mean(!!value_sym, na.rm = TRUE),
           sd = stats::sd(!!value_sym, na.rm = TRUE),
-          min = min(!!value_sym, na.rm = TRUE),
-          max = max(!!value_sym, na.rm = TRUE),
+          min = if (all(is.na(!!value_sym))) NA_real_ else min(!!value_sym, na.rm = TRUE),
+          max = if (all(is.na(!!value_sym))) NA_real_ else max(!!value_sym, na.rm = TRUE),
           .groups = 'drop'
         )
 
@@ -73,8 +73,8 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
         normality_results <- local_data %>%
           dplyr::group_by(!!!group_syms) %>%
           dplyr::summarise(
-            Shapiro_W = if(sum(!is.na(!!value_sym)) > 2) stats::shapiro.test(!!value_sym)$statistic else NA_real_,
-            Shapiro_p = if(sum(!is.na(!!value_sym)) > 2) stats::shapiro.test(!!value_sym)$p.value else NA_real_,
+            Shapiro_W = if(sum(is.finite(!!value_sym)) >= 3 && sum(is.finite(!!value_sym)) <= 5000 && stats::sd((!!value_sym)[is.finite(!!value_sym)]) > 0) stats::shapiro.test((!!value_sym)[is.finite(!!value_sym)])$statistic else NA_real_,
+            Shapiro_p = if(sum(is.finite(!!value_sym)) >= 3 && sum(is.finite(!!value_sym)) <= 5000 && stats::sd((!!value_sym)[is.finite(!!value_sym)]) > 0) stats::shapiro.test((!!value_sym)[is.finite(!!value_sym)])$p.value else NA_real_,
             .groups = 'drop'
           )
         desc_stats <- dplyr::left_join(desc_stats, normality_results, by = group_cols)
@@ -92,6 +92,12 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
 }
 
 # 函数2：两次重复测量信度----
+#' @param cv_method raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。
+#' @param swc_threshold 非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。
+#' @details TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
+#'   SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
+#'   双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
+#'   单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
 #' @title 分析两个会话的重测信度 (t检验, 支持批量处理)
 #' @description 专为比较两个会话(test-retest)的场景设计。可对单个或多个因变量进行分析。
 #'   使用配对t检验和Cohen's d评估系统误差。
@@ -122,156 +128,53 @@ summarize_trials <- function(data, value_cols, group_cols, normality = FALSE) {
 #' reliability_subset_ttest <- reliability_data[reliability_data$Session %in% c("Week1", "Week2"), ]
 #' analyze_reliability_ttest(
 #'   data = reliability_subset_ttest,
-#'   subject_col = "Subject",
+#'   subject_col = "Participant",
 #'   session_col = "Session",
 #'   value_cols = "Score",
 #'   trial_col = "Trial",
 #'   method = "mean"
 #' )
 
-analyze_reliability_ttest <- function(data,
-                                      subject_col,
-                                      session_col,
-                                      value_cols, # <--- 已修改参数名
-                                      trial_type = c("single", "average"),
-                                      trial_col = NULL,
-                                      method = "mean",
-                                      icc_model = c("twoway", "oneway"),
-                                      icc_type = c("agreement", "consistency"),
-                                      swc_threshold = NULL,
-                                      var_names = NULL) {
-
-  # --- 参数预处理 ---
-  # 检查session列是否恰好有两个水平
-  if (dplyr::n_distinct(data[[session_col]]) != 2) {
-    stop("错误: 'session_col' 必须恰好包含两个不同的会话水平才能使用此函数。")
-  }
-
-  final_icc_model <- match.arg(icc_model)
-  final_icc_type <- match.arg(icc_type)
-  initial_trial_type <- match.arg(trial_type)
-
-  if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
-  }
-
-  all_results_df <- purrr::imap_dfr(
-    .x = value_cols,
-    .f = function(current_value_col, index) {
-
-      final_var_name <- if (!is.null(var_names)) var_names[index] else current_value_col
-
-      final_trial_type <- initial_trial_type
-      temp_trial_col <- trial_col
-
-      if (!is.null(temp_trial_col) && dplyr::n_distinct(data[[temp_trial_col]]) == 1) {
-        final_trial_type <- "single"
-        temp_trial_col <- NULL
-      }
-      if (!is.null(temp_trial_col) && method == "mean") {
-        final_trial_type <- "average"
-      }
-
-      local_data <- data
-      if (!is.factor(local_data[[session_col]])) {
-        local_data[[session_col]] <- as.factor(local_data[[session_col]])
-      }
-
-      subject_sym <- rlang::sym(subject_col)
-      session_sym <- rlang::sym(session_col)
-      value_sym <- rlang::sym(current_value_col) # <--- 使用当前循环的变量
-
-      if (!is.null(temp_trial_col)) {
-        agg_fun <- switch(method,
-                          mean = function(x) mean(x, na.rm = TRUE),
-                          max = function(x) max(x, na.rm = TRUE),
-                          min = function(x) min(x, na.rm = TRUE),
-                          median = function(x) median(x, na.rm = TRUE),
-                          stop("错误: method 必须是 'mean', 'max', 'min', 或 'median' 之一。")
-        )
-        processed_data <- local_data %>%
-          dplyr::group_by(!!subject_sym, !!session_sym) %>%
-          dplyr::summarise(agg_value = agg_fun(!!value_sym), .groups = 'drop')
-      } else {
-        processed_data <- local_data %>%
-          dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
-      }
-
-      stats_summary <- processed_data %>%
-        dplyr::group_by(!!session_sym) %>%
-        dplyr::summarise(
-          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
-                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
-          .groups = 'drop'
-        ) %>%
-        tidyr::pivot_wider(names_from = !!session_sym, values_from = mean_sd)
-
-      wide_data <- processed_data %>%
-        tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
-      measure_cols <- levels(local_data[[session_col]])
-      icc_results <- irr::icc(
-        wide_data[, measure_cols],
-        model = final_icc_model,
-        type = final_icc_type,
-        unit = final_trial_type
-      )
-      chosen_icc <- icc_results
-
-      long_for_calc <- wide_data %>%
-        dplyr::mutate(subject_id = dplyr::row_number()) %>%
-        tidyr::pivot_longer(cols = dplyr::all_of(measure_cols), names_to = "trial", values_to = "value") %>%
-        dplyr::mutate(trial = factor(.data$trial, levels = measure_cols))
-
-      subject_means <- long_for_calc %>%
-        dplyr::group_by(.data$subject_id) %>%
-        dplyr::summarise(mean_value = mean(.data$value, na.rm = TRUE), .groups = 'drop')
-      between_subject_sd <- stats::sd(subject_means$mean_value, na.rm = TRUE)
-      sem <- between_subject_sd * sqrt(1 - chosen_icc$value)
-
-      diffs <- wide_data[[measure_cols[2]]] - wide_data[[measure_cols[1]]]
-      te <- stats::sd(diffs, na.rm = TRUE) / sqrt(2)
-      grand_mean <- mean(c(wide_data[[measure_cols[1]]], wide_data[[measure_cols[2]]]), na.rm = TRUE)
-      cv_percent <- (te / grand_mean) * 100
-      swc <- swc_threshold * between_subject_sd
-
-      ttest_result <- stats::t.test(wide_data[[measure_cols[1]]], wide_data[[measure_cols[2]]], paired = TRUE)
-      formula_for_d <- stats::as.formula(paste("agg_value ~", session_col))
-      cohens_d_result <- rstatix::cohens_d(processed_data, formula_for_d, paired = TRUE)
-
-      icc_value <- chosen_icc$value
-      icc_magnitude <- dplyr::case_when(
-        icc_value < 0.1 ~ "Trivial", icc_value < 0.3 ~ "Low",
-        icc_value < 0.5 ~ "Moderate", icc_value < 0.7 ~ "High",
-        icc_value < 0.9 ~ "Very High", icc_value <= 1.0 ~ "Nearly Perfect",
-        TRUE ~ "Error"
-      )
-      usefulness <- ifelse(round(te, 2) < swc, "Good", ifelse(round(te, 2) == swc, "OK", "Marginal"))
-
-      # --- 结果汇总 ---
-      results_df <- data.frame(
-        Variable = final_var_name,
-        stats_summary,
-        "ICC (95% CI)" = paste0(round(chosen_icc$value, 2), ' (', round(chosen_icc$lbound, 2), ',', round(chosen_icc$ubound, 2), ')'),
-        'p (ICC)' = round(chosen_icc$p, 3),
-        'ICC Magnitude' = icc_magnitude,
-        'CV%' = round(cv_percent, 2),
-        SEM = round(sem, 2),
-        TE = round(te, 2),
-        SWC = round(swc, 2),
-        Usefulness = usefulness,
-        'p (t)' = round(ttest_result$p.value, 3),
-        'ES (d)' = round(cohens_d_result$effsize, 2),
-        'ES Magnitude' = cohens_d_result$magnitude,
-        check.names = FALSE
-      )
-      return(results_df)
-    }
-  )
-  return(all_results_df)
+analyze_reliability_ttest <- function(data, subject_col, session_col, value_cols,
+    trial_type = c("single", "average"), trial_col = NULL, method = "mean",
+    icc_model = c("twoway", "oneway"), icc_type = c("agreement", "consistency"),
+    swc_threshold = NULL, var_names = NULL, cv_method = c("raw", "log")) {
+  model <- match.arg(icc_model); type <- match.arg(icc_type)
+  unit <- match.arg(trial_type); cv_method <- match.arg(cv_method)
+  .validate_reliability_options(value_cols, var_names, swc_threshold)
+  purrr::imap_dfr(value_cols, function(current_value_col, index) {
+    x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
+    if (ncol(x) != 2L) stop("\u6b64\u51fd\u6570\u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4f1a\u8bdd\u3002")
+    icc <- irr::icc(x, model = model, type = type, unit = unit)
+    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold)
+    summary <- as.data.frame(as.list(stats::setNames(vapply(seq_len(ncol(x)), function(j) {
+      paste0(round(mean(x[, j]), 2), " \u00b1 ", round(stats::sd(x[, j]), 2))
+    }, character(1)), colnames(x))), check.names = FALSE)
+    value <- icc$value
+    magnitude <- if (!is.finite(value)) "Undefined" else if (value < 0.1) "Trivial" else if (value < 0.3) "Low" else if (value < 0.5) "Moderate" else if (value < 0.7) "High" else if (value < 0.9) "Very High" else "Nearly Perfect"
+    out <- data.frame(Variable = if (is.null(var_names)) current_value_col else var_names[index],
+      summary, "ICC (95% CI)" = paste0(round(value, 2), " (", round(icc$lbound, 2), ",", round(icc$ubound, 2), ")"),
+      "p (ICC)" = round(icc$p, 3), "ICC Magnitude" = magnitude,
+      "CV%" = round(metrics$cv, 2), SEM = round(metrics$sem, 2), TE = round(metrics$te, 2),
+      SWC = round(metrics$swc, 2), Usefulness = metrics$usefulness, check.names = FALSE)
+    paired <- .paired_stats(x[, 1L], x[, 2L])
+    out[["p (t)"]] <- round(paired$p, 3)
+    out[["ES (d)"]] <- round(paired$d, 2)
+    out[["ES Magnitude"]] <- paired$magnitude
+    out[["N"]] <- nrow(x)
+    out[["CV Method"]] <- cv_method
+    out[["ICC Unit"]] <- unit
+    out
+  })
 }
 
-
 # 函数3：多次重复测量信度 (支持批量处理)----
+#' @param cv_method raw 为 100*TE/均值；log 为 100*(exp(TE_log)-1)，与参考表一致，要求正值。
+#' @param swc_threshold 非负 SWC 系数；NULL 返回 NA。SWC 使用会话内 SD 的合并值。
+#' @details TE 为扣除被试与会话效应后的残差标准差，两会话等于 SD(差值)/sqrt(2)。
+#'   SEM 按 ICC 模型的误差方差计算；average 单位的误差方差除以会话数。
+#'   双因素一致性 SEM=sqrt(MSE)，绝对一致性 SEM=sqrt(MSE+(MS_session-MSE)/N)。
+#'   单因素 SEM 使用被试内均方。负误差方差返回 NA。TE/CV 始终针对单个会话。
 #' @title 从长格式数据分析重测信度 (支持单个或多个变量)
 #' @description 为长格式数据设计。可对单个或多个因变量进行分析。
 #'   函数会自动聚合一个“会话(Session)”内的多次“尝试(Trial)”，
@@ -281,7 +184,7 @@ analyze_reliability_ttest <- function(data,
 #' @param subject_col 包含被试ID的列名。
 #' @param session_col 包含测试会话/时间点的列名。建议此列为因子类型以保证顺序正确。
 #' @param value_cols 包含需要分析的指标数值的列名。可以是单个字符串，也可以是包含多个字符串的向量。
-#' @param trial_type 用户选择的ICC类型。当 trial_col 被使用且 method = 'mean' 时，此参数会被自动设为 "average"。
+#' @param trial_type 跨会话 ICC 的单位：single 为一个会话分数，average 为所有会话分数的平均。会话内聚合不会自动改变此参数。
 #' @param trial_col (可选) 包含试次编号的列名。如果提供，函数会聚合这些试次。
 #' @param method 聚合会话内多次尝试的方法。
 #' @param icc_model (可选) 传递给`ICC`函数的模型。默认为 "twoway"。可选 "oneway" 或 "twoway"。
@@ -302,163 +205,48 @@ analyze_reliability_ttest <- function(data,
 #' # 使用全部三个会话进行 ANOVA 信度分析
 #' analyze_reliability_ANOVA(
 #'   data = reliability_data,
-#'   subject_col = "Subject",
+#'   subject_col = "Participant",
 #'   session_col = "Session",
 #'   value_cols = "Score",
 #'   trial_col = "Trial",
 #'   method = "mean"
 #' )
 
-analyze_reliability_ANOVA <- function(data,
-                                      subject_col,
-                                      session_col,
-                                      value_cols,
-                                      trial_type = c("single", "average"),
-                                      trial_col = NULL,
-                                      method = "mean",
-                                      icc_model = c("twoway", "oneway"),
-                                      icc_type = c("agreement", "consistency"),
-                                      swc_threshold = NULL,
-                                      var_names = NULL) {
+analyze_reliability_ANOVA <- function(data, subject_col, session_col, value_cols,
+    trial_type = c("single", "average"), trial_col = NULL, method = "mean",
+    icc_model = c("twoway", "oneway"), icc_type = c("agreement", "consistency"),
+    swc_threshold = NULL, var_names = NULL, cv_method = c("raw", "log")) {
+  model <- match.arg(icc_model); type <- match.arg(icc_type)
+  unit <- match.arg(trial_type); cv_method <- match.arg(cv_method)
+  .validate_reliability_options(value_cols, var_names, swc_threshold)
+  purrr::imap_dfr(value_cols, function(current_value_col, index) {
+    x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
 
-  final_icc_model <- match.arg(icc_model)
-  final_icc_type <- match.arg(icc_type)
-
-  initial_trial_type <- match.arg(trial_type)
-
-  if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
-  }
-
-  all_results_df <- purrr::imap_dfr(
-    .x = value_cols,
-    .f = function(current_value_col, index) {
-
-      final_var_name <- if (!is.null(var_names)) var_names[index] else current_value_col
-      final_trial_type <- initial_trial_type
-      temp_trial_col <- trial_col
-
-      if (!is.null(temp_trial_col) && dplyr::n_distinct(data[[temp_trial_col]]) == 1) {
-        message(paste0("(", current_value_col, ") 提醒: trial_col 中只发现一个试次，无法进行聚合。trial_type 已自动设为 'single'。"))
-        final_trial_type <- "single"
-        temp_trial_col <- NULL
-      }
-
-      if (!is.null(temp_trial_col) && method == "mean") {
-        if (final_trial_type != "average") {
-          message(paste0("(", current_value_col, ") 提醒: 由于 method = 'mean', trial_type 已自动设为 'average' 以计算均值的信度 (ICC,k)。"))
-        }
-        final_trial_type <- "average"
-      }
-
-      local_data <- data
-      if (!is.factor(local_data[[session_col]])) {
-        local_data[[session_col]] <- as.factor(local_data[[session_col]])
-      }
-
-      subject_sym <- rlang::sym(subject_col)
-      session_sym <- rlang::sym(session_col)
-      value_sym <- rlang::sym(current_value_col)
-
-      if (!is.null(temp_trial_col)) {
-        agg_fun <- switch(method,
-                          mean = function(x) mean(x, na.rm = TRUE),
-                          max = function(x) max(x, na.rm = TRUE),
-                          min = function(x) min(x, na.rm = TRUE),
-                          median = function(x) median(x, na.rm = TRUE),
-                          stop("错误: method 必须是 'mean', 'max', 'min', 或 'median' 之一。")
-        )
-        processed_data <- local_data %>%
-          dplyr::group_by(!!subject_sym, !!session_sym) %>%
-          dplyr::summarise(agg_value = agg_fun(!!value_sym), .groups = 'drop')
-      } else {
-        processed_data <- local_data %>%
-          dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
-      }
-
-      stats_summary <- processed_data %>%
-        dplyr::group_by(!!session_sym) %>%
-        dplyr::summarise(
-          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
-                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
-          .groups = 'drop'
-        ) %>%
-        tidyr::pivot_wider(names_from = !!session_sym, values_from = mean_sd)
-
-      wide_data <- processed_data %>%
-        tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
-
-      measure_cols <- levels(local_data[[session_col]])
-      icc_results <- irr::icc(
-        wide_data[, measure_cols],
-        model = final_icc_model,
-        type = final_icc_type,
-        unit = final_trial_type
-      )
-
-      chosen_icc <- icc_results
-
-      icc_value <- chosen_icc$value
-      icc_magnitude <- dplyr::case_when(
-        icc_value < 0.1 ~ "Trivial", icc_value < 0.3 ~ "Low",
-        icc_value < 0.5 ~ "Moderate", icc_value < 0.7 ~ "High",
-        icc_value < 0.9 ~ "Very High", icc_value <= 1.0 ~ "Nearly Perfect",
-        TRUE ~ "Error"
-      )
-
-      long_for_calc <- wide_data %>%
-        dplyr::mutate(subject_id = dplyr::row_number()) %>%
-        tidyr::pivot_longer(cols = dplyr::all_of(measure_cols), names_to = "trial", values_to = "value") %>%
-        dplyr::mutate(trial = factor(.data$trial, levels = measure_cols))
-
-      subject_means <- long_for_calc %>%
-        dplyr::group_by(.data$subject_id) %>%
-        dplyr::summarise(mean_value = mean(.data$value, na.rm = TRUE), .groups = 'drop')
-
-      between_subject_sd <- stats::sd(subject_means$mean_value, na.rm = TRUE)
-      sem <- between_subject_sd * sqrt(1 - chosen_icc$value)
-
-      aov_for_te <- stats::aov(value ~ as.factor(subject_id), data = long_for_calc)
-      mse <- summary(aov_for_te)[[1]]["Residuals", "Mean Sq"]
-      te <- sqrt(mse)
-      grand_mean <- mean(long_for_calc$value, na.rm = TRUE)
-      cv_percent <- (te / grand_mean) * 100
-      swc <- swc_threshold * between_subject_sd
-
-      rm_anova_results <- rstatix::anova_test(
-        data = long_for_calc, dv = value, wid = subject_id, within = trial, effect.size = "pes"
-      )
-      anova_table <- rstatix::get_anova_table(rm_anova_results)
-
-      pes_interpretation <- dplyr::case_when(
-        anova_table$pes < 0.01 ~ "Trivial", anova_table$pes < 0.06 ~ "Small",
-        anova_table$pes < 0.14 ~ "Moderate", TRUE ~ "Large"
-      )
-
-      usefulness <- ifelse(round(te, 2) < swc, "Good", ifelse(round(te, 2) == swc, "OK", "Marginal"))
-
-      results_df <- data.frame(
-        Variable = final_var_name,
-        stats_summary,
-        "ICC (95% CI)" = paste0(round(chosen_icc$value, 2), ' (', round(chosen_icc$lbound, 2), ',', round(chosen_icc$ubound, 2), ')'),
-        'p (ICC)' = round(chosen_icc$p, 3),
-        'ICC Magnitude' = icc_magnitude,
-        'CV%' = round(cv_percent, 2),
-        SEM = round(sem, 2),
-        MSE = round(mse,2),
-        TE = round(te, 2),
-        SWC = round(swc, 2),
-        Usefulness = usefulness,
-        'p (ANOVA)' = round(anova_table$p, 3),
-        'ES (η²ₚ)' = round(anova_table$pes, 2),
-        'ES Magnitude' = pes_interpretation,
-        check.names = FALSE
-      )
-
-      return(results_df)
-    }
-  )
-  return(all_results_df)
+    icc <- irr::icc(x, model = model, type = type, unit = unit)
+    metrics <- .reliability_metrics(x, model, type, unit, cv_method, swc_threshold)
+    summary <- as.data.frame(as.list(stats::setNames(vapply(seq_len(ncol(x)), function(j) {
+      paste0(round(mean(x[, j]), 2), " \u00b1 ", round(stats::sd(x[, j]), 2))
+    }, character(1)), colnames(x))), check.names = FALSE)
+    value <- icc$value
+    magnitude <- if (!is.finite(value)) "Undefined" else if (value < 0.1) "Trivial" else if (value < 0.3) "Low" else if (value < 0.5) "Moderate" else if (value < 0.7) "High" else if (value < 0.9) "Very High" else "Nearly Perfect"
+    out <- data.frame(Variable = if (is.null(var_names)) current_value_col else var_names[index],
+      summary, "ICC (95% CI)" = paste0(round(value, 2), " (", round(icc$lbound, 2), ",", round(icc$ubound, 2), ")"),
+      "p (ICC)" = round(icc$p, 3), "ICC Magnitude" = magnitude,
+      "CV%" = round(metrics$cv, 2), SEM = round(metrics$sem, 2), TE = round(metrics$te, 2),
+      SWC = round(metrics$swc, 2), Usefulness = metrics$usefulness, check.names = FALSE)
+    out$MSE <- round(metrics$mse, 2)
+    long <- data.frame(subject_id = factor(rep(seq_len(nrow(x)), ncol(x))),
+                       trial = factor(rep(colnames(x), each = nrow(x))), value = as.vector(x))
+    a <- rstatix::get_anova_table(rstatix::anova_test(data = long, dv = value,
+         wid = subject_id, within = trial, effect.size = "pes"))
+    out[["p (ANOVA)"]] <- round(a$p, 3)
+    out[["ES (\u03b7\u00b2\u209a)"]] <- round(a$pes, 2)
+    out[["ES Magnitude"]] <- if (!is.finite(a$pes)) "Undefined" else if (a$pes < 0.01) "Trivial" else if (a$pes < 0.06) "Small" else if (a$pes < 0.14) "Moderate" else "Large"
+    out[["N"]] <- nrow(x)
+    out[["CV Method"]] <- cv_method
+    out[["ICC Unit"]] <- unit
+    out
+  })
 }
 
 `%||%` <- function(a, b) {
@@ -469,10 +257,17 @@ analyze_reliability_ANOVA <- function(data,
 # 函数4：效度分析----
 #' @title 批量分析效度
 #' @description (推荐) 用于效度分析，通过明确指定金标准和测试方法，进行全面的比较...
-# ... (roxygen comments remain the same) ...
+#' @param data 长格式数据框。
+#' @param subject_col 被试标识列名。
+#' @param method_col 测量方法列名。
+#' @param value_cols 数值指标列名向量。
+#' @param trial_col 试次列名；提供后按被试和方法聚合。
+#' @param method 聚合方法：mean、max、min 或 median。
+#' @param swc_threshold 非负 SWC 系数；NULL 表示不计算阈值推断。
+#' @param var_names 与指标一一对应的显示名称。
 #' @param criterion_method 一个字符串，指定 `method_col` 中代表**金标准**的水平名称。
 #' @param test_method 一个字符串，指定 `method_col` 中代表**测试方法**的水平名称。
-# ... (other params remain the same) ...
+# 按指定金标准和测试方法进行比较
 #' @export
 #' @examples
 #' # 使用内置的 validity_data 数据集进行效度分析
@@ -482,13 +277,14 @@ analyze_reliability_ANOVA <- function(data,
 #'   method_col = "Device",
 #'   criterion_method = "GasAnalyzer",
 #'   test_method = "PortableDevice",
-#'   value_cols = "VO2max"
+#'   value_cols = "VO2max",
+#'   trial_col = "Trial"
 #' )
 
 analysis_validity <- function(data,
                               subject_col,
                               method_col,
-                              criterion_method, # <--- Updated parameter name
+                              criterion_method, # 指定金标准方法
                               test_method,
                               value_cols,
                               trial_col = NULL,
@@ -496,13 +292,14 @@ analysis_validity <- function(data,
                               swc_threshold = NULL,
                               var_names = NULL) {
 
-  # --- Parameter checks ---
+  # 参数校验
+  .validate_reliability_options(value_cols, var_names, swc_threshold)
   valid_data <- data[data[[method_col]] %in% c(criterion_method, test_method), ]
   if (dplyr::n_distinct(valid_data[[method_col]]) != 2) {
-    stop("错误: 在数据中找不到您指定的两种方法。请检查 'criterion_method' 和 'test_method' 的名称是否正确。")
+    stop("\u9519\u8bef: \u5728\u6570\u636e\u4e2d\u627e\u4e0d\u5230\u60a8\u6307\u5b9a\u7684\u4e24\u79cd\u65b9\u6cd5\u3002\u8bf7\u68c0\u67e5 'criterion_method' \u548c 'test_method' \u7684\u540d\u79f0\u662f\u5426\u6b63\u786e\u3002")
   }
   if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
+    stop("\u9519\u8bef: 'var_names' \u7684\u957f\u5ea6\u5fc5\u987b\u4e0e 'value_cols' \u7684\u957f\u5ea6\u5b8c\u5168\u76f8\u540c\u3002")
   }
 
   all_results_df <- purrr::imap_dfr(
@@ -511,33 +308,19 @@ analysis_validity <- function(data,
 
       final_var_name <- if (!is.null(var_names)) var_names[index] else current_value_col
 
-      local_data <- valid_data; subject_sym <- rlang::sym(subject_col); method_sym <- rlang::sym(method_col); value_sym <- rlang::sym(current_value_col)
-      if (!is.null(trial_col)) {
-        agg_fun <- switch(method, mean = function(x) mean(x, na.rm = TRUE), max = function(x) max(x, na.rm = TRUE), min = function(x) min(x, na.rm = TRUE), median = function(x) stats::median(x, na.rm = TRUE), stop("错误: method 必须是 'mean', 'max', 'min', 或 'median' 之一。"))
-        processed_data <- local_data %>% dplyr::group_by(!!subject_sym, !!method_sym) %>% dplyr::summarise(agg_value = agg_fun(!!value_sym), .groups = 'drop')
-      } else {
-        processed_data <- local_data %>% dplyr::select(!!subject_sym, !!method_sym, agg_value = !!value_sym)
-      }
-
-      stats_summary <- processed_data %>%
-        dplyr::group_by(!!method_sym) %>%
-        dplyr::summarise(
-          mean_sd = paste0(round(mean(agg_value, na.rm = TRUE), 2), " ± ",
-                           round(stats::sd(agg_value, na.rm = TRUE), 2)),
-          .groups = 'drop'
-        ) %>%
-        tidyr::pivot_wider(names_from = !!method_sym, values_from = mean_sd)
-
-      wide_data <- processed_data %>% tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!method_sym, values_from = agg_value)
-      if (!all(c(criterion_method, test_method) %in% names(wide_data))) { stop("处理数据后出错，无法找到指定的金标准或测试方法列。") }
-      criterion_measure <- wide_data[[criterion_method]]; test_measure <- wide_data[[test_method]]
-
+      x <- .prepare_repeated(valid_data, subject_col, method_col, current_value_col,
+                             trial_col, method, sessions = c(criterion_method, test_method))
+      criterion_measure <- x[, 1L]; test_measure <- x[, 2L]
+      stats_summary <- as.data.frame(as.list(stats::setNames(vapply(seq_len(ncol(x)), function(j) {
+        paste0(round(mean(x[, j]), 2), " \u00b1 ", round(stats::sd(x[, j]), 2))
+      }, character(1)), colnames(x))), check.names = FALSE)
+      processed_data <- data.frame(agg_value = as.vector(x), group = rep(c("criterion", "test"), each = nrow(x)))
 
       ttest_result <- stats::t.test(test_measure, criterion_measure, paired = TRUE)
       diff_conf_int <- ttest_result$conf.int
 
-      formula_for_d <- stats::as.formula(paste("agg_value ~", method_col))
-      cohens_d_result <- rstatix::cohens_d(processed_data, formula_for_d, paired = TRUE) # <--- FIXED LINE
+      formula_for_d <- stats::as.formula("agg_value ~ group")
+      cohens_d_result <- rstatix::cohens_d(processed_data, formula_for_d, paired = TRUE) # 配对效应量
 
       mean_diff <- mean(test_measure - criterion_measure, na.rm = TRUE)
       corr_test_result <- stats::cor.test(test_measure, criterion_measure)
@@ -546,16 +329,16 @@ analysis_validity <- function(data,
       r_p_value <- corr_test_result$p.value
       r_magnitude <- dplyr::case_when(abs(pearson_r) < 0.1 ~ "Trivial", abs(pearson_r) < 0.3 ~ "Small", abs(pearson_r) < 0.5 ~ "Moderate", abs(pearson_r) < 0.7 ~ "Large", abs(pearson_r) < 0.9 ~ "Very Large", TRUE ~ "Nearly Perfect")
       sd_criterion <- stats::sd(criterion_measure, na.rm = TRUE)
-      see <- sd_criterion * sqrt(1 - pearson_r^2)
-      swc <- swc_threshold * sd_criterion
+      see <- summary(stats::lm(criterion_measure ~ test_measure))$sigma
+      swc <- if (is.null(swc_threshold)) NA_real_ else swc_threshold * sd_criterion
       mbi_inference <- dplyr::case_when(diff_conf_int[2] < -swc ~ "Substantially Lower", diff_conf_int[1] > swc ~ "Substantially Higher", diff_conf_int[1] > -swc & diff_conf_int[2] < swc ~ "Trivial", TRUE ~ "Unclear")
-      se_diff <- (diff_conf_int[2] - diff_conf_int[1]) / (2 * qt(0.975, df = ttest_result$parameter))
-      prob_lower <- round(pt((-swc - mean_diff) / se_diff, df = ttest_result$parameter) * 100)
-      prob_higher <- round((1 - pt((swc - mean_diff) / se_diff, df = ttest_result$parameter)) * 100)
+      se_diff <- (diff_conf_int[2] - diff_conf_int[1]) / (2 * stats::qt(0.975, df = ttest_result$parameter))
+      prob_lower <- round(stats::pt((-swc - mean_diff) / se_diff, df = ttest_result$parameter) * 100)
+      prob_higher <- round((1 - stats::pt((swc - mean_diff) / se_diff, df = ttest_result$parameter)) * 100)
       prob_trivial <- 100 - prob_lower - prob_higher
       mbi_probs <- paste0(prob_lower, "/", prob_trivial, "/", prob_higher)
 
-      # --- Final results table ---
+      # 汇总结果表
       results_df <- data.frame(
         "Variable" = final_var_name,
         stats_summary,
@@ -608,10 +391,10 @@ analyze_B_A <- function(data,
 
   # --- 参数预处理和检查 ---
   if (dplyr::n_distinct(data[[session_col]]) != 2) {
-    stop("错误: 'session_col' 必须恰好包含两个不同的会话水平才能使用此函数。")
+    stop("\u9519\u8bef: 'session_col' \u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4e0d\u540c\u7684\u4f1a\u8bdd\u6c34\u5e73\u624d\u80fd\u4f7f\u7528\u6b64\u51fd\u6570\u3002")
   }
   if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
+    stop("\u9519\u8bef: 'var_names' \u7684\u957f\u5ea6\u5fc5\u987b\u4e0e 'value_cols' \u7684\u957f\u5ea6\u5b8c\u5168\u76f8\u540c\u3002")
   }
 
   list_of_results <- purrr::imap(
@@ -622,33 +405,10 @@ analyze_B_A <- function(data,
       final_var_name <- if (!is.null(var_names)) var_names[index] else current_value_col
 
       # --- 以下为原函数的主体逻辑 ---
-      local_data <- data
-      if (!is.factor(local_data[[session_col]])) {
-        local_data[[session_col]] <- as.factor(local_data[[session_col]])
-      }
-
-      subject_sym <- rlang::sym(subject_col)
-      session_sym <- rlang::sym(session_col)
-      value_sym <- rlang::sym(current_value_col)
-
-      if (!is.null(trial_col)) {
-        agg_fun <- switch(method,
-                          mean = function(x) mean(x, na.rm = TRUE),
-                          max = function(x) max(x, na.rm = TRUE),
-                          min = function(x) min(x, na.rm = TRUE),
-                          median = function(x) stats::median(x, na.rm = TRUE),
-                          stop("错误: method 必须是 'mean', 'max', 'min', 或 'median' 之一。")
-        )
-        processed_data <- local_data %>%
-          dplyr::group_by(!!subject_sym, !!session_sym) %>%
-          dplyr::summarise(agg_value = agg_fun(!!value_sym), .groups = 'drop')
-      } else {
-        processed_data <- local_data %>%
-          dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
-      }
-      wide_data <- processed_data %>%
-        tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
-      measure_cols <- levels(local_data[[session_col]])
+      x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
+      if (ncol(x) != 2L) stop("\u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4f1a\u8bdd\u3002")
+      wide_data <- as.data.frame(x)
+      measure_cols <- colnames(x)
 
       diffs <- wide_data[[measure_cols[2]]] - wide_data[[measure_cols[1]]]
       bias <- mean(diffs, na.rm = TRUE)
@@ -657,8 +417,9 @@ analyze_B_A <- function(data,
       lower_loa <- bias - 1.96 * sd_diff
       n_subjects <- sum(!is.na(diffs))
       se_diff <- sd_diff / sqrt(n_subjects)
-      bias_ci_lower <- bias - 1.96 * se_diff
-      bias_ci_upper <- bias + 1.96 * se_diff
+      critical <- stats::qt(0.975, df = n_subjects - 1L)
+      bias_ci_lower <- bias - critical * se_diff
+      bias_ci_upper <- bias + critical * se_diff
 
       # --- 结果汇总 (使用更适合发表的列名) ---
       table_df  <- data.frame(
@@ -731,7 +492,7 @@ plot_reliability <- function(data,
 
   # --- 参数检查 ---
   if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
+    stop("\u9519\u8bef: 'var_names' \u7684\u957f\u5ea6\u5fc5\u987b\u4e0e 'value_cols' \u7684\u957f\u5ea6\u5b8c\u5168\u76f8\u540c\u3002")
   }
 
   if (!is.factor(data[[session_col]])) {
@@ -797,7 +558,7 @@ plot_reliability <- function(data,
             )
           }
         } else {
-          warning("提醒: 至少需要两个组才能进行显著性比较。")
+          warning("\u63d0\u9192: \u81f3\u5c11\u9700\u8981\u4e24\u4e2a\u7ec4\u624d\u80fd\u8fdb\u884c\u663e\u8457\u6027\u6bd4\u8f83\u3002")
         }
       }
 
@@ -828,6 +589,7 @@ plot_reliability <- function(data,
 #' @param method 聚合会话内多次尝试的方法。
 #' @param var_names (可选) 一个与 `value_cols` 一一对应的字符向量，用于设定每个图形的标题。
 #' @param point_fill (可选) 散点的填充颜色。
+#' @param density_color 边缘密度曲线颜色。
 #' @param density_fill (可选) 右侧密度图的填充颜色。
 #' @param bias_color (可选) Bias线的颜色。
 #' @param loa_color (可选) LoA线的颜色。
@@ -856,8 +618,8 @@ plot_B_A <- function(data,
                      ci_fill = "#E7D3D3") {
 
   # --- 参数检查 ---
-  if (dplyr::n_distinct(data[[session_col]]) != 2) { stop("错误: 'session_col' 必须恰好包含两个不同的会话水平才能使用此函数。") }
-  if (!is.null(var_names) && length(var_names) != length(value_cols)) { stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。") }
+  if (dplyr::n_distinct(data[[session_col]]) != 2) { stop("\u9519\u8bef: 'session_col' \u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4e0d\u540c\u7684\u4f1a\u8bdd\u6c34\u5e73\u624d\u80fd\u4f7f\u7528\u6b64\u51fd\u6570\u3002") }
+  if (!is.null(var_names) && length(var_names) != length(value_cols)) { stop("\u9519\u8bef: 'var_names' \u7684\u957f\u5ea6\u5fc5\u987b\u4e0e 'value_cols' \u7684\u957f\u5ea6\u5b8c\u5168\u76f8\u540c\u3002") }
 
   plots_list <- purrr::imap(
     .x = value_cols,
@@ -865,16 +627,11 @@ plot_B_A <- function(data,
 
       plot_title <- if (!is.null(var_names)) var_names[index] else current_value_col
 
-      local_data <- data; if (!is.factor(local_data[[session_col]])) { local_data[[session_col]] <- as.factor(local_data[[session_col]]) }
-      subject_sym <- rlang::sym(subject_col); session_sym <- rlang::sym(session_col); value_sym <- rlang::sym(current_value_col)
-      if (!is.null(trial_col)) {
-        agg_fun <- switch(method, mean = function(x) mean(x, na.rm = TRUE), max = function(x) max(x, na.rm = TRUE), min = function(x) min(x, na.rm = TRUE), median = function(x) stats::median(x, na.rm = TRUE), stop("错误: method 必须是 'mean', 'max', 'min', 或 'median' 之一。"))
-        processed_data <- local_data %>% dplyr::group_by(!!subject_sym, !!session_sym) %>% dplyr::summarise(agg_value = agg_fun(!!value_sym), .groups = 'drop')
-      } else {
-        processed_data <- local_data %>% dplyr::select(!!subject_sym, !!session_sym, agg_value = !!value_sym)
-      }
-      wide_data <- processed_data %>% tidyr::pivot_wider(id_cols = !!subject_sym, names_from = !!session_sym, values_from = agg_value)
-      measure_cols <- levels(local_data[[session_col]])
+      x <- .prepare_repeated(data, subject_col, session_col, current_value_col, trial_col, method)
+      if (ncol(x) != 2L) stop("\u5fc5\u987b\u6070\u597d\u5305\u542b\u4e24\u4e2a\u4f1a\u8bdd\u3002")
+      wide_data <- as.data.frame(x)
+      measure_cols <- colnames(x)
+
       plot_data <- data.frame(mean = (wide_data[[measure_cols[1]]] + wide_data[[measure_cols[2]]]) / 2, diff = wide_data[[measure_cols[2]]] - wide_data[[measure_cols[1]]])
 
       analysis_results <- analyze_B_A(data = data, subject_col = subject_col, session_col = session_col, value_cols = current_value_col, trial_col = trial_col, method = method)
@@ -934,6 +691,7 @@ plot_B_A <- function(data,
 #' @param point_fill (可选) 散点的填充颜色。
 #' @param line_color (可选) 回归线的颜色。
 #' @param ci_fill (可选) 回归线置信区间的填充颜色。
+#' @param density_color 边缘密度曲线颜色。
 #' @param density_fill (可选) 边缘密度图的填充颜色。
 #'
 #' @return 返回一个包含一个或多个 ggplot 对象的列表。
@@ -960,7 +718,7 @@ plot_validity_correlation <- function(data,
                                       density_color = "#B9375D") {
 
   if (!is.null(var_names) && length(var_names) != length(value_cols)) {
-    stop("错误: 'var_names' 的长度必须与 'value_cols' 的长度完全相同。")
+    stop("\u9519\u8bef: 'var_names' \u7684\u957f\u5ea6\u5fc5\u987b\u4e0e 'value_cols' \u7684\u957f\u5ea6\u5b8c\u5168\u76f8\u540c\u3002")
   }
 
   plots_list <- purrr::imap(
@@ -979,7 +737,7 @@ plot_validity_correlation <- function(data,
           values_from = all_of(current_value_col)
         )
       if (!all(c(criterion_method, test_method) %in% names(wide_data))) {
-        stop("处理数据后出错，无法找到指定的金标准或测试方法列。")
+        stop("\u5904\u7406\u6570\u636e\u540e\u51fa\u9519\uff0c\u65e0\u6cd5\u627e\u5230\u6307\u5b9a\u7684\u91d1\u6807\u51c6\u6216\u6d4b\u8bd5\u65b9\u6cd5\u5217\u3002")
       }
 
       p <- ggplot(wide_data, aes(x = .data[[test_method]], y = .data[[criterion_method]])) +
@@ -1049,7 +807,7 @@ export_table <- function(result_df,
   }
 
   if (!is.data.frame(result_df)) {
-    stop("错误: 'result_df' 必须是一个数据框或一个包含 'results_for_publication' 的列表。")
+    stop("\u9519\u8bef: 'result_df' \u5fc5\u987b\u662f\u4e00\u4e2a\u6570\u636e\u6846\u6216\u4e00\u4e2a\u5305\u542b 'results_for_publication' \u7684\u5217\u8868\u3002")
   }
 
   final_title <- table_title
@@ -1059,13 +817,13 @@ export_table <- function(result_df,
     if (any(c("Shapiro_p", "mean", "sd") %in% col_names)) {
       final_title <- "Table 1: Descriptive statistics"
     } else if ("ICC (95% CI)" %in% col_names) {
-      final_title <- "Table 2：Realiability Analysis Results"
+      final_title <- "Table 2\uff1aRealiability Analysis Results"
     } else if ("Pearson's r (95% CI)" %in% col_names) {
       final_title <- "Table 3: Validity Analysis Results"
     } else if (any(grepl("Bias", col_names))) { # 更稳健的B-A检测
-      final_title <- "Table 4：Bland-Altman Analysis Results"
+      final_title <- "Table 4\uff1aBland-Altman Analysis Results"
     } else {
-      warning("无法自动匹配标题，将使用默认或用户指定的标题。")
+      warning("\u65e0\u6cd5\u81ea\u52a8\u5339\u914d\u6807\u9898\uff0c\u5c06\u4f7f\u7528\u9ed8\u8ba4\u6216\u7528\u6237\u6307\u5b9a\u7684\u6807\u9898\u3002")
     }
   }
 
@@ -1088,5 +846,5 @@ export_table <- function(result_df,
   doc <- officer::read_docx()
   doc <- flextable::body_add_flextable(doc, value = ft)
   print(doc, target = filename)
-  message(paste("表格已成功导出到:", filename))
+  message(paste("\u8868\u683c\u5df2\u6210\u529f\u5bfc\u51fa\u5230:", filename))
 }

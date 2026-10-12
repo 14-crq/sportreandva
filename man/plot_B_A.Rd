@@ -39,6 +39,8 @@ plot_B_A(
 
 \item{density_fill}{(可选) 右侧密度图的填充颜色。}
 
+\item{density_color}{边缘密度曲线颜色。}
+
 \item{bias_color}{(可选) Bias线的颜色。}
 
 \item{loa_color}{(可选) LoA线的颜色。}
